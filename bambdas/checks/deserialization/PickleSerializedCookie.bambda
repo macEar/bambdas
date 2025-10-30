@@ -1,0 +1,56 @@
+id: ff7fbb14-73c2-4ed6-b51c-c39bb91feee8
+name: Python Deserialization: Pickle data in cookies
+function: SCAN_CHECK_PASSIVE_PER_REQUEST
+location: SCANNER
+source: |
+    /**
+    Identifies requests with pickle-serialized data in cookies.
+    The scan check processes only responses with Set-Cookie value.
+    Currently, the scan check only supports Pickle Protocol 2-5.
+
+    @author macEar (https://github.com/macEar)
+    **/
+
+    if (!requestResponse.hasResponse())
+        return AuditResult.auditResult();  
+
+    List<Cookie> cookies = requestResponse.response().cookies();
+    if (cookies == null || cookies.isEmpty())
+        return AuditResult.auditResult();
+
+    final String ISSUE_TITLE = "Cookie contains pickle-serialized data";
+    final String ISSUE_DETAIL_TEMPLATE = "The response sets cookie %s which value is base64-decoded pickle data. Detected Python Pickle PROTO header: 0x80 0x%02x";
+    final String ISSUE_REMEDIATION = """
+            The pickle module is not intended to be secure against erroneous or maliciously constructed data. Never unpickle data received from an untrusted or unauthenticated source.""";
+    final String ISSUE_BACKGROUND = """
+            The Python standard library has a module called pickle that is used for serializing and deserializing objects. It's widely regarded as dangerous to unpickle data from any untrusted source. It was determined that this web application unpickles data from user-controlled input.""";
+
+    List<AuditIssue> issues = new ArrayList<>();
+
+    for (Cookie cookie : cookies) {    
+        String cookieName = cookie.name().trim();
+        String cookieValue = cookie.value().trim();
+    
+        if (!cookieValue.matches("^[A-Za-z0-9+/=\\n\\r]+$"))
+            continue;
+    
+        byte[] bytes = null;
+        try {
+            bytes = Base64.getDecoder().decode(cookieValue);
+        } catch (Exception e) {
+            continue;    
+        }
+    
+        // PROTO >= 2 && PROTO <= 5
+        if (bytes != null && bytes.length >= 2 && (bytes[0] & 0xFF) == 0x80) {
+            int proto = bytes[1] & 0xFF;
+            if (proto >= 2 && proto <= 5) {
+                AuditIssue issue = AuditIssue.auditIssue(ISSUE_TITLE, String.format(ISSUE_DETAIL_TEMPLATE, cookieName, proto), ISSUE_REMEDIATION, requestResponse.request().url(), AuditIssueSeverity.HIGH, AuditIssueConfidence.FIRM, ISSUE_BACKGROUND, ISSUE_REMEDIATION, AuditIssueSeverity.HIGH, requestResponse);
+                issues.add(issue);
+            }
+        }
+    
+        // PROTO == 1 Not Implemented Yet
+    }
+
+    return AuditResult.auditResult(issues);
